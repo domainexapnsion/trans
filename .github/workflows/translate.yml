@@ -1,0 +1,94 @@
+name: Manga Translator CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      chapter_url:
+        description: 'Bato.to chapter URL'
+        required: true
+      target_language:
+        description: 'Target language (e.g., marathi, hindi, spanish)'
+        default: 'marathi'
+        required: false
+      manual_mode:
+        description: 'Use manual translation mode? (true/false)'
+        default: 'false'
+        required: false
+      translations_file:
+        description: 'Path to translations file (for manual mode)'
+        required: false
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the repository
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Set up Python
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    # Install Tesseract and Fonts
+    - name: Install Tesseract and Fonts
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tesseract-ocr tesseract-ocr-eng fonts-noto fonts-noto-cjk fonts-deva
+        fc-list | grep -i noto || echo "No Noto fonts found"
+        tesseract --version
+
+    # Install Python dependencies
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # Create translations file (for manual mode)
+    - name: Prepare translations file
+      if: github.event.inputs.manual_mode == 'true' && github.event.inputs.translations_file
+      run: |
+        echo "${{ github.event.inputs.translations_file }}" > translations.txt
+      shell: bash
+
+    # Run translator script
+    - name: Run translator script
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      run: |
+        if [ "${{ github.event.inputs.manual_mode }}" == "true" ] && [ -f translations.txt ]; then
+          python bato_translator.py "${{ github.event.inputs.chapter_url }}" \
+            --lang "${{ github.event.inputs.target_language }}" \
+            --manual \
+            --translations translations.txt
+        else
+          python bato_translator.py "${{ github.event.inputs.chapter_url }}" \
+            --lang "${{ github.event.inputs.target_language }}" \
+            ${{ secrets.GEMINI_API_KEY && format('--api-key {0}', secrets.GEMINI_API_KEY) || '' }}
+        fi
+
+    # Upload translated images
+    - name: Upload translated images
+      uses: actions/upload-artifact@v4
+      with:
+        name: translated-chapter
+        path: translated_chapters/
+        retention-days: 7
+
+    # Upload logs for debugging
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: logs
+        path: |
+          *.log
+          translations.txt
+        retention-days: 7
